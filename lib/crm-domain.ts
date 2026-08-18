@@ -80,6 +80,9 @@ export type CRMData = {
   deliveries: Delivery[];
   payments: Payment[];
   expenses: Expense[];
+  // Epoch ms of the last change. Used to decide whether the copy in Google Drive
+  // or the copy cached on this device is the newer one.
+  updatedAt?: number;
 };
 
 export type CreateSaleInput = {

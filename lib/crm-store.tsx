@@ -20,6 +20,7 @@ import {
 import {
   isConfigured as isGoogleConfigured,
   loadFromDrive,
+  resetDriveState,
   restoreSession,
   saveToDrive,
   signIn as googleSignIn,
@@ -72,14 +73,28 @@ export function CRMProvider({ children }: { children: ReactNode }) {
     } catch { /* ignore */ }
   }, []);
 
-  // Pull the latest copy from the signed-in user's Google Drive.
+  // Pull the latest copy from the signed-in user's Google Drive — but never let a
+  // stale Drive copy overwrite newer unsaved changes still sitting on this device.
   const loadFromCloud = useCallback(async () => {
     try {
       const remote = await loadFromDrive();
       if (remote) {
-        const merged = { ...emptyCRMData, ...remote };
-        setData(merged);
-        void AsyncStorage.setItem(STORAGE_KEY, JSON.stringify(merged));
+        let cached: CRMData | null = null;
+        try {
+          const raw = await AsyncStorage.getItem(STORAGE_KEY);
+          cached = raw ? JSON.parse(raw) : null;
+        } catch { /* ignore */ }
+        const remoteAt = remote.updatedAt ?? 0;
+        const cachedAt = cached?.updatedAt ?? 0;
+        if (remoteAt >= cachedAt) {
+          const merged = { ...emptyCRMData, ...remote };
+          setData(merged);
+          void AsyncStorage.setItem(STORAGE_KEY, JSON.stringify(merged));
+        } else if (cached) {
+          // This device has a change that never reached Drive (e.g. reloaded
+          // before the last save finished). Keep it and push it back up.
+          void saveToDrive(cached);
+        }
       }
       setSyncError("");
     } catch (error) {
@@ -117,15 +132,18 @@ export function CRMProvider({ children }: { children: ReactNode }) {
 
   const signOut = useCallback(() => {
     googleSignOut();
+    resetDriveState();
     setSignedIn(false);
     setUserEmail("");
   }, []);
 
   const persist = useCallback((next: CRMData) => {
-    setData(next);
-    void AsyncStorage.setItem(STORAGE_KEY, JSON.stringify(next));
+    // Stamp the change so a later reload can tell this is the newest copy.
+    const stamped: CRMData = { ...next, updatedAt: Date.now() };
+    setData(stamped);
+    void AsyncStorage.setItem(STORAGE_KEY, JSON.stringify(stamped));
     if (NEEDS_GOOGLE && signedIn) {
-      void saveToDrive(next)
+      void saveToDrive(stamped)
         .then((ok) => setSyncError(ok ? "" : "Your last change did not save to Google Drive."))
         .catch((error) => setSyncError(error instanceof Error ? error.message : "Save failed."));
     }

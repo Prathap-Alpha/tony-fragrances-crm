@@ -20,6 +20,10 @@ export type GoogleUser = { email: string };
 
 let tokenClient: any = null;
 let scriptPromise: Promise<void> | null = null;
+// Remember the one data file so we never create duplicates, and never race two
+// lookups into two POSTs. Saves are chained so they run strictly one at a time.
+let cachedFileId: string | null = null;
+let saveChain: Promise<boolean> = Promise.resolve(true);
 
 // --- Google Identity Services script loader ------------------------------
 
@@ -164,13 +168,15 @@ async function getAccessToken(): Promise<string> {
 // --- Drive read / write ---------------------------------------------------
 
 async function findFileId(accessToken: string): Promise<string | null> {
+  if (cachedFileId) return cachedFileId;
   const q = encodeURIComponent(`name='${DRIVE_FILE_NAME}' and trashed=false`);
   const url = `https://www.googleapis.com/drive/v3/files?q=${q}&spaces=drive&fields=files(id,name,modifiedTime)&orderBy=modifiedTime desc`;
   const res = await fetch(url, { headers: { Authorization: `Bearer ${accessToken}` } });
   if (!res.ok) throw new Error(`Drive lookup failed (${res.status}).`);
   const body = await res.json();
   const file = body?.files?.[0];
-  return file?.id ?? null;
+  cachedFileId = file?.id ?? null;
+  return cachedFileId;
 }
 
 // Load the CRM JSON from the user's Drive. Returns null if no file exists yet.
@@ -190,7 +196,14 @@ export async function loadFromDrive(): Promise<any | null> {
 }
 
 // Save the CRM JSON to the user's Drive (creates the file the first time).
-export async function saveToDrive(data: any): Promise<boolean> {
+// Writes are queued so two rapid changes can't race and lose each other.
+export function saveToDrive(data: any): Promise<boolean> {
+  const run = () => doSave(data);
+  saveChain = saveChain.then(run, run);
+  return saveChain;
+}
+
+async function doSave(data: any): Promise<boolean> {
   if (!isConfigured()) return false;
   const accessToken = await getAccessToken();
   const fileId = await findFileId(accessToken);
@@ -233,5 +246,16 @@ export async function saveToDrive(data: any): Promise<boolean> {
       body,
     },
   );
+  if (res.ok) {
+    // Remember the new file id so the next save updates it instead of creating
+    // a second file.
+    try { cachedFileId = (await res.json())?.id ?? cachedFileId; } catch { /* ignore */ }
+  }
   return res.ok;
+}
+
+// Forget the remembered file id (call on sign-out, so a different account that
+// signs in next doesn't write into the previous account's file id).
+export function resetDriveState() {
+  cachedFileId = null;
 }
