@@ -48,6 +48,7 @@ type CRMContextValue = {
   addCustomer: (input: Omit<Customer, "id" | "createdAt">) => Customer;
   updateCustomer: (id: string, patch: Partial<Omit<Customer, "id" | "createdAt">>) => void;
   addProduct: (input: Omit<Product, "id" | "createdAt">) => Product;
+  importProducts: (inputs: Array<Omit<Product, "id" | "createdAt">>) => number;
   adjustProduct: (id: string, quantityChange: number) => void;
   createSale: (input: CreateSaleInput) => Invoice;
   addPayment: (input: { invoiceId: string; amount: number; method: PaymentMethod; reference: string }) => void;
@@ -165,6 +166,19 @@ export function CRMProvider({ children }: { children: ReactNode }) {
     return product;
   }, [data, persist]);
 
+  // Add several products at once, skipping any whose name is already in stock
+  // (case-insensitive) so importing twice never creates duplicates. Returns how
+  // many were actually added.
+  const importProducts = useCallback((inputs: Array<Omit<Product, "id" | "createdAt">>) => {
+    const existing = new Set(data.products.map((p) => p.name.trim().toLowerCase()));
+    const fresh = inputs.filter((p) => !existing.has(p.name.trim().toLowerCase()));
+    if (fresh.length === 0) return 0;
+    const now = new Date().toISOString();
+    const added: Product[] = fresh.map((input) => ({ id: createId("product"), createdAt: now, ...input }));
+    persist({ ...data, products: [...added, ...data.products] });
+    return fresh.length;
+  }, [data, persist]);
+
   const adjustProduct = useCallback((id: string, quantityChange: number) => {
     persist({ ...data, products: data.products.map((product) => product.id === id ? { ...product, quantityOnHand: Math.max(0, product.quantityOnHand + quantityChange) } : product) });
   }, [data, persist]);
@@ -204,12 +218,13 @@ export function CRMProvider({ children }: { children: ReactNode }) {
     addCustomer,
     updateCustomer,
     addProduct,
+    importProducts,
     adjustProduct,
     createSale,
     addPayment,
     addExpense,
     updateDeliveryStatus,
-  }), [data, loading, signedIn, authReady, userEmail, syncError, signIn, signOut, addCustomer, updateCustomer, addProduct, adjustProduct, createSale, addPayment, addExpense, updateDeliveryStatus]);
+  }), [data, loading, signedIn, authReady, userEmail, syncError, signIn, signOut, addCustomer, updateCustomer, addProduct, importProducts, adjustProduct, createSale, addPayment, addExpense, updateDeliveryStatus]);
 
   return <CRMContext.Provider value={value}>{children}</CRMContext.Provider>;
 }
