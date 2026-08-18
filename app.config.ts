@@ -124,6 +124,13 @@ const config: ExpoConfig = {
   experiments: {
     typedRoutes: true,
     reactCompiler: true,
+    // When hosted under a sub-path (e.g. GitHub Pages project site) set
+    // EXPO_PUBLIC_BASE_URL=tony-fragrances-crm (NO leading slash — a leading
+    // slash gets mangled into a Windows path by Git Bash) so asset links resolve.
+    baseUrl: (() => {
+      const raw = (process.env.EXPO_PUBLIC_BASE_URL ?? "").trim().replace(/^\/+|\/+$/g, "");
+      return raw ? `/${raw}` : "";
+    })(),
   },
 };
 

@@ -1,27 +1,50 @@
-const CACHE_NAME = "tony-fragrances-crm-v1";
-const CORE_ASSETS = ["/", "/manifest.json", "/assets/images/icon.png", "/assets/images/favicon.png"];
+// Service worker for offline support + installability. Path-agnostic: it uses
+// its own registration scope, so it works whether the app is served at a domain
+// root or under a sub-path like /tony-fragrances-crm/.
+const CACHE_NAME = "tony-fragrances-crm-v2";
+const SCOPE_URL = new URL(self.registration.scope);
+const APP_SHELL = SCOPE_URL.pathname; // e.g. "/tony-fragrances-crm/"
 
-self.addEventListener("install", (event) => {
-  event.waitUntil(caches.open(CACHE_NAME).then((cache) => cache.addAll(CORE_ASSETS)).then(() => self.skipWaiting()));
-});
+self.addEventListener("install", () => self.skipWaiting());
 
 self.addEventListener("activate", (event) => {
-  event.waitUntil(caches.keys().then((keys) => Promise.all(keys.filter((key) => key !== CACHE_NAME).map((key) => caches.delete(key)))).then(() => self.clients.claim()));
+  event.waitUntil(
+    caches
+      .keys()
+      .then((keys) => Promise.all(keys.filter((k) => k !== CACHE_NAME).map((k) => caches.delete(k))))
+      .then(() => self.clients.claim()),
+  );
 });
 
 self.addEventListener("fetch", (event) => {
-  if (event.request.method !== "GET") return;
+  const req = event.request;
+  if (req.method !== "GET") return;
+
+  // Navigations: network-first so new versions are picked up, cache as fallback
+  // (this is what keeps the app usable offline once it has been opened online).
+  if (req.mode === "navigate") {
+    event.respondWith(
+      fetch(req)
+        .then((res) => {
+          const copy = res.clone();
+          caches.open(CACHE_NAME).then((c) => c.put(APP_SHELL, copy));
+          return res;
+        })
+        .catch(() => caches.match(APP_SHELL).then((c) => c || caches.match(req))),
+    );
+    return;
+  }
+
+  // Other GETs: serve from cache if present, otherwise fetch and cache.
   event.respondWith(
-    caches.match(event.request).then((cached) => {
-      if (cached) return cached;
-      return fetch(event.request).then((response) => {
-        const copy = response.clone();
-        caches.open(CACHE_NAME).then((cache) => cache.put(event.request, copy));
-        return response;
-      }).catch(() => {
-        if (event.request.mode === "navigate") return caches.match("/");
-        return Response.error();
-      });
-    }),
+    caches.match(req).then(
+      (cached) =>
+        cached ||
+        fetch(req).then((res) => {
+          const copy = res.clone();
+          caches.open(CACHE_NAME).then((c) => c.put(req, copy));
+          return res;
+        }),
+    ),
   );
 });
