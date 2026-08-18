@@ -5,8 +5,8 @@ cd "$(dirname "$0")/.."
 
 export EXPO_PUBLIC_GOOGLE_CLIENT_ID="196234648247-sbmaderc4hua2klnslj6cmvh4dmpicib.apps.googleusercontent.com"
 # NO leading slash — Git Bash would rewrite "/tony-fragrances-crm" into a
-# Windows file path. app.config.ts adds the leading slash back.
-export MSYS_NO_PATHCONV=1
+# Windows file path. app.config.ts adds the leading slash back. (Do NOT set
+# MSYS_NO_PATHCONV here — it breaks the git worktree path below on Windows.)
 export EXPO_PUBLIC_BASE_URL="tony-fragrances-crm"
 
 echo "== exporting web build =="
@@ -21,8 +21,10 @@ touch dist-web/.nojekyll
 cp dist-web/index.html dist-web/404.html
 
 echo "== publishing to gh-pages =="
-WT="$(mktemp -d)/tony-ghp"
-git worktree remove --force /tmp/tony-ghp 2>/dev/null || true
+# Keep the worktree beside the repo (a Windows-native path) — a /tmp path can be
+# mangled by Git on Windows and orphan a worktree that then locks the branch.
+WT="$(pwd)/../_ghp_tony"
+git worktree remove --force "$WT" 2>/dev/null || true
 git worktree prune
 git worktree add --force -B gh-pages "$WT"
 # clear old contents, copy fresh build
