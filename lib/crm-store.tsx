@@ -1,5 +1,6 @@
 import AsyncStorage from "@react-native-async-storage/async-storage";
 import { createContext, ReactNode, useCallback, useContext, useEffect, useMemo, useState } from "react";
+import { Platform } from "react-native";
 
 import {
   applyPayment,
@@ -16,38 +17,32 @@ import {
   Product,
   CreateSaleInput,
 } from "./crm-domain";
+import {
+  isConfigured as isGoogleConfigured,
+  loadFromDrive,
+  restoreSession,
+  saveToDrive,
+  signIn as googleSignIn,
+  signOut as googleSignOut,
+} from "./google-drive";
 
 const STORAGE_KEY = "tony-fragrances-crm-v1";
-const API_PATH = "/api/crm";
 
-async function loadSharedData(): Promise<CRMData | null> {
-  try {
-    const response = await fetch(API_PATH, { headers: { Accept: "application/json" } });
-    if (!response.ok) return null;
-    const body = await response.json();
-    if (!body || !body.data) return null;
-    return { ...emptyCRMData, ...body.data };
-  } catch {
-    return null;
-  }
-}
-
-async function saveSharedData(next: CRMData): Promise<boolean> {
-  try {
-    const response = await fetch(API_PATH, {
-      method: "PUT",
-      headers: { "Content-Type": "application/json", Accept: "application/json" },
-      body: JSON.stringify({ data: next }),
-    });
-    return response.ok;
-  } catch {
-    return false;
-  }
-}
+// On native (Expo Android) there is no Google sign-in — the app just uses the
+// on-device cache. On web, data lives in each user's own Google Drive.
+const NEEDS_GOOGLE = Platform.OS === "web" && isGoogleConfigured();
 
 type CRMContextValue = {
   data: CRMData;
   loading: boolean;
+  // Google Drive sign-in state (web).
+  needsGoogle: boolean;      // true when a Google sign-in is required to see data
+  signedIn: boolean;         // the user has signed in with Google
+  authReady: boolean;        // finished checking for an existing session
+  userEmail: string;         // which Google account holds the data
+  syncError: string;         // last save/load error, if any
+  signIn: () => Promise<void>;
+  signOut: () => void;
   summary: ReturnType<typeof financeSnapshot>;
   addCustomer: (input: Omit<Customer, "id" | "createdAt">) => Customer;
   updateCustomer: (id: string, patch: Partial<Omit<Customer, "id" | "createdAt">>) => void;
@@ -64,33 +59,77 @@ const CRMContext = createContext<CRMContextValue | null>(null);
 export function CRMProvider({ children }: { children: ReactNode }) {
   const [data, setData] = useState<CRMData>(emptyCRMData);
   const [loading, setLoading] = useState(true);
+  const [signedIn, setSignedIn] = useState(!NEEDS_GOOGLE); // native/unconfigured = no gate
+  const [authReady, setAuthReady] = useState(false);
+  const [userEmail, setUserEmail] = useState("");
+  const [syncError, setSyncError] = useState("");
 
+  // Load the device cache first so the app opens instantly / works offline.
+  const loadCache = useCallback(async () => {
+    try {
+      const stored = await AsyncStorage.getItem(STORAGE_KEY);
+      if (stored) setData({ ...emptyCRMData, ...JSON.parse(stored) });
+    } catch { /* ignore */ }
+  }, []);
+
+  // Pull the latest copy from the signed-in user's Google Drive.
+  const loadFromCloud = useCallback(async () => {
+    try {
+      const remote = await loadFromDrive();
+      if (remote) {
+        const merged = { ...emptyCRMData, ...remote };
+        setData(merged);
+        void AsyncStorage.setItem(STORAGE_KEY, JSON.stringify(merged));
+      }
+      setSyncError("");
+    } catch (error) {
+      setSyncError(error instanceof Error ? error.message : "Could not load from Google Drive.");
+    }
+  }, []);
+
+  // On start: show the cache, then restore any existing Google session.
   useEffect(() => {
     let active = true;
     (async () => {
-      // Prefer the shared cloud dataset so every device sees the same records.
-      const shared = await loadSharedData();
-      if (shared && active) {
-        setData(shared);
-        void AsyncStorage.setItem(STORAGE_KEY, JSON.stringify(shared));
-        if (active) setLoading(false);
-        return;
+      await loadCache();
+      if (NEEDS_GOOGLE) {
+        const user = await restoreSession();
+        if (active && user) {
+          setSignedIn(true);
+          setUserEmail(user.email);
+          await loadFromCloud();
+        }
       }
-      // Offline fallback: use the device cache when the server is unreachable.
-      try {
-        const stored = await AsyncStorage.getItem(STORAGE_KEY);
-        if (stored && active) setData({ ...emptyCRMData, ...JSON.parse(stored) });
-      } catch { /* ignore */ }
-      if (active) setLoading(false);
+      if (active) {
+        setAuthReady(true);
+        setLoading(false);
+      }
     })();
     return () => { active = false; };
+  }, [loadCache, loadFromCloud]);
+
+  const signIn = useCallback(async () => {
+    const user = await googleSignIn();
+    setSignedIn(true);
+    setUserEmail(user.email);
+    await loadFromCloud();
+  }, [loadFromCloud]);
+
+  const signOut = useCallback(() => {
+    googleSignOut();
+    setSignedIn(false);
+    setUserEmail("");
   }, []);
 
   const persist = useCallback((next: CRMData) => {
     setData(next);
     void AsyncStorage.setItem(STORAGE_KEY, JSON.stringify(next));
-    void saveSharedData(next);
-  }, []);
+    if (NEEDS_GOOGLE && signedIn) {
+      void saveToDrive(next)
+        .then((ok) => setSyncError(ok ? "" : "Your last change did not save to Google Drive."))
+        .catch((error) => setSyncError(error instanceof Error ? error.message : "Save failed."));
+    }
+  }, [signedIn]);
 
   const addCustomer = useCallback((input: Omit<Customer, "id" | "createdAt">) => {
     const customer: Customer = { id: createId("customer"), createdAt: new Date().toISOString(), ...input };
@@ -136,6 +175,13 @@ export function CRMProvider({ children }: { children: ReactNode }) {
   const value = useMemo(() => ({
     data,
     loading,
+    needsGoogle: NEEDS_GOOGLE,
+    signedIn,
+    authReady,
+    userEmail,
+    syncError,
+    signIn,
+    signOut,
     summary: financeSnapshot(data),
     addCustomer,
     updateCustomer,
@@ -145,7 +191,7 @@ export function CRMProvider({ children }: { children: ReactNode }) {
     addPayment,
     addExpense,
     updateDeliveryStatus,
-  }), [data, loading, addCustomer, updateCustomer, addProduct, adjustProduct, createSale, addPayment, addExpense, updateDeliveryStatus]);
+  }), [data, loading, signedIn, authReady, userEmail, syncError, signIn, signOut, addCustomer, updateCustomer, addProduct, adjustProduct, createSale, addPayment, addExpense, updateDeliveryStatus]);
 
   return <CRMContext.Provider value={value}>{children}</CRMContext.Provider>;
 }
