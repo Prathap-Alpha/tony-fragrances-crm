@@ -1,5 +1,5 @@
 import AsyncStorage from "@react-native-async-storage/async-storage";
-import { createContext, ReactNode, useCallback, useContext, useEffect, useMemo, useState } from "react";
+import { createContext, ReactNode, useCallback, useContext, useEffect, useMemo, useRef, useState } from "react";
 import { Platform } from "react-native";
 
 import {
@@ -13,6 +13,7 @@ import {
   Expense,
   financeSnapshot,
   Invoice,
+  mergeData,
   PaymentMethod,
   Product,
   CreateSaleInput,
@@ -41,6 +42,7 @@ type CRMContextValue = {
   signedIn: boolean;         // the user has signed in with Google
   authReady: boolean;        // finished checking for an existing session
   userEmail: string;         // which Google account holds the data
+  syncing: boolean;          // refreshing from Google Drive right now
   syncError: string;         // last save/load error, if any
   signIn: () => Promise<void>;
   signOut: () => void;
@@ -64,7 +66,9 @@ export function CRMProvider({ children }: { children: ReactNode }) {
   const [signedIn, setSignedIn] = useState(!NEEDS_GOOGLE); // native/unconfigured = no gate
   const [authReady, setAuthReady] = useState(false);
   const [userEmail, setUserEmail] = useState("");
+  const [syncing, setSyncing] = useState(false);
   const [syncError, setSyncError] = useState("");
+  const syncingRef = useRef(false);
 
   // Load the device cache first so the app opens instantly / works offline.
   const loadCache = useCallback(async () => {
@@ -74,32 +78,35 @@ export function CRMProvider({ children }: { children: ReactNode }) {
     } catch { /* ignore */ }
   }, []);
 
-  // Pull the latest copy from the signed-in user's Google Drive — but never let a
-  // stale Drive copy overwrite newer unsaved changes still sitting on this device.
+  // Pull the latest from Google Drive and MERGE with this device's data so
+  // records added on either device are never lost (union by id).
   const loadFromCloud = useCallback(async () => {
+    if (syncingRef.current) return;         // already running
+    syncingRef.current = true;
+    setSyncing(true);
     try {
       const remote = await loadFromDrive();
       if (remote) {
-        let cached: CRMData | null = null;
+        let local: CRMData = emptyCRMData;
         try {
           const raw = await AsyncStorage.getItem(STORAGE_KEY);
-          cached = raw ? JSON.parse(raw) : null;
-        } catch { /* ignore */ }
-        const remoteAt = remote.updatedAt ?? 0;
-        const cachedAt = cached?.updatedAt ?? 0;
-        if (remoteAt >= cachedAt) {
-          const merged = { ...emptyCRMData, ...remote };
-          setData(merged);
-          void AsyncStorage.setItem(STORAGE_KEY, JSON.stringify(merged));
-        } else if (cached) {
-          // This device has a change that never reached Drive (e.g. reloaded
-          // before the last save finished). Keep it and push it back up.
-          void saveToDrive(cached);
-        }
+          if (raw) local = { ...emptyCRMData, ...JSON.parse(raw) };
+        } catch { /* use empty */ }
+
+        const remoteData: CRMData = { ...emptyCRMData, ...remote };
+        const merged = mergeData(local, remoteData);
+
+        setData(merged);
+        void AsyncStorage.setItem(STORAGE_KEY, JSON.stringify(merged));
+        // Push the merged version back so the other device picks up our records.
+        void saveToDrive(merged);
       }
       setSyncError("");
     } catch (error) {
       setSyncError(error instanceof Error ? error.message : "Could not load from Google Drive.");
+    } finally {
+      syncingRef.current = false;
+      setSyncing(false);
     }
   }, []);
 
@@ -123,6 +130,19 @@ export function CRMProvider({ children }: { children: ReactNode }) {
     })();
     return () => { active = false; };
   }, [loadCache, loadFromCloud]);
+
+  // When the browser tab regains focus (Tony switches from phone to computer or
+  // just re-opens the browser), refresh from Drive so records from the other
+  // device appear automatically without a manual reload.
+  useEffect(() => {
+    if (!NEEDS_GOOGLE || !signedIn) return;
+    if (typeof document === "undefined") return;
+    const handler = () => {
+      if (document.visibilityState === "visible") void loadFromCloud();
+    };
+    document.addEventListener("visibilitychange", handler);
+    return () => document.removeEventListener("visibilitychange", handler);
+  }, [signedIn, loadFromCloud]);
 
   const signIn = useCallback(async () => {
     const user = await googleSignIn();
@@ -211,6 +231,7 @@ export function CRMProvider({ children }: { children: ReactNode }) {
     signedIn,
     authReady,
     userEmail,
+    syncing,
     syncError,
     signIn,
     signOut,
@@ -224,7 +245,7 @@ export function CRMProvider({ children }: { children: ReactNode }) {
     addPayment,
     addExpense,
     updateDeliveryStatus,
-  }), [data, loading, signedIn, authReady, userEmail, syncError, signIn, signOut, addCustomer, updateCustomer, addProduct, importProducts, adjustProduct, createSale, addPayment, addExpense, updateDeliveryStatus]);
+  }), [data, loading, signedIn, authReady, userEmail, syncing, syncError, signIn, signOut, addCustomer, updateCustomer, addProduct, importProducts, adjustProduct, createSale, addPayment, addExpense, updateDeliveryStatus]);
 
   return <CRMContext.Provider value={value}>{children}</CRMContext.Provider>;
 }

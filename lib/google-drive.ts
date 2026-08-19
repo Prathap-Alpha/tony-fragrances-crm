@@ -1,6 +1,7 @@
 import { Platform } from "react-native";
 
 import { DRIVE_FILE_NAME, GOOGLE_CLIENT_ID, GOOGLE_SCOPES } from "@/constants/google";
+import { emptyCRMData, mergeData } from "./crm-domain";
 
 // ---------------------------------------------------------------------------
 // Google Drive storage adapter (web only).
@@ -207,7 +208,31 @@ async function doSave(data: any): Promise<boolean> {
   if (!isConfigured()) return false;
   const accessToken = await getAccessToken();
   const fileId = await findFileId(accessToken);
-  const content = JSON.stringify(data);
+
+  let toSave = data;
+
+  // Before writing, read the latest from Drive and merge so we never overwrite
+  // records that another device added since this device last loaded.
+  if (fileId) {
+    try {
+      const res = await fetch(
+        `https://www.googleapis.com/drive/v3/files/${fileId}?alt=media`,
+        { headers: { Authorization: `Bearer ${accessToken}` } },
+      );
+      if (res.ok) {
+        const text = await res.text();
+        if (text.trim()) {
+          const remote = { ...emptyCRMData, ...JSON.parse(text) };
+          const local = { ...emptyCRMData, ...data };
+          toSave = mergeData(local, remote);
+        }
+      }
+    } catch {
+      // If the read fails, save the local data as-is rather than losing it.
+    }
+  }
+
+  const content = JSON.stringify(toSave);
 
   if (fileId) {
     const res = await fetch(

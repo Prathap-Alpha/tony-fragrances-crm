@@ -201,3 +201,39 @@ export const applyPayment = (data: CRMData, payment: Omit<Payment, "id" | "date"
   const payments = [{ id: createId("payment"), ...payment, amount, date: payment.date ?? new Date().toISOString() }, ...data.payments];
   return { ...data, invoices, payments };
 };
+
+// ---------------------------------------------------------------------------
+// Merge — used by the sync layer to combine data from two devices without
+// losing any records. Every array is unioned by id; when the same id exists
+// on both sides the version from the newer dataset (higher updatedAt) wins.
+// ---------------------------------------------------------------------------
+
+export function mergeData(a: CRMData, b: CRMData): CRMData {
+  const aIsNewer = (a.updatedAt ?? 0) >= (b.updatedAt ?? 0);
+  const winner = aIsNewer ? a : b;
+  const loser = aIsNewer ? b : a;
+
+  function union<T extends { id: string }>(winnerArr: T[], loserArr: T[]): T[] {
+    const seen = new Set<string>();
+    const result: T[] = [];
+    for (const item of winnerArr) {
+      if (!seen.has(item.id)) { seen.add(item.id); result.push(item); }
+    }
+    for (const item of loserArr) {
+      if (!seen.has(item.id)) { seen.add(item.id); result.push(item); }
+    }
+    return result;
+  }
+
+  return {
+    businessName: winner.businessName || loser.businessName,
+    invoicePrefix: winner.invoicePrefix || loser.invoicePrefix,
+    customers: union(winner.customers, loser.customers),
+    products: union(winner.products, loser.products),
+    invoices: union(winner.invoices, loser.invoices),
+    deliveries: union(winner.deliveries, loser.deliveries),
+    payments: union(winner.payments, loser.payments),
+    expenses: union(winner.expenses, loser.expenses),
+    updatedAt: Math.max(a.updatedAt ?? 0, b.updatedAt ?? 0),
+  };
+}
