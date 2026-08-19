@@ -98,8 +98,11 @@ export function CRMProvider({ children }: { children: ReactNode }) {
 
         setData(merged);
         void AsyncStorage.setItem(STORAGE_KEY, JSON.stringify(merged));
-        // Push the merged version back so the other device picks up our records.
-        void saveToDrive(merged);
+        // Only push back to Drive if the merge actually added local records the
+        // remote didn't have — avoids a redundant write on every tab-focus.
+        if (JSON.stringify(merged) !== JSON.stringify(remoteData)) {
+          void saveToDrive(merged);
+        }
       }
       setSyncError("");
     } catch (error) {

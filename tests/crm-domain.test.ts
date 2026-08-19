@@ -3,7 +3,7 @@ import { describe, expect, it, vi } from "vitest";
 vi.mock("expo-print", () => ({ printToFileAsync: vi.fn() }));
 vi.mock("expo-sharing", () => ({ isAvailableAsync: vi.fn(), shareAsync: vi.fn() }));
 
-import { applyPayment, createSaleRecord, CRMData, emptyCRMData, financeSnapshot } from "../lib/crm-domain";
+import { applyPayment, createSaleRecord, CRMData, emptyCRMData, financeSnapshot, mergeData } from "../lib/crm-domain";
 import { buildInvoiceHtml } from "../lib/invoice-pdf";
 
 const baseData: CRMData = {
@@ -27,6 +27,67 @@ describe("CRM finance workflow", () => {
     expect(paid.invoices[0].status).toBe("paid");
     expect(paid.invoices[0].paidAmount).toBe(250);
     expect(financeSnapshot(paid).collected).toBe(250);
+  });
+});
+
+describe("mergeData — cross-device sync", () => {
+  const deviceA: CRMData = {
+    ...emptyCRMData,
+    customers: [
+      { id: "c-1", name: "Mod Motors", phone: "", location: "", landmark: "", notes: "", createdAt: "2026-08-18T10:00:00Z" },
+      { id: "c-shared", name: "Shared", phone: "", location: "", landmark: "", notes: "", createdAt: "2026-08-18T08:00:00Z" },
+    ],
+    expenses: [{ id: "e-1", category: "Car wash", amount: 50, method: "Cash", description: "wash", date: "2026-08-18T10:00:00Z" }],
+    updatedAt: 1000,
+  };
+  const deviceB: CRMData = {
+    ...emptyCRMData,
+    customers: [
+      { id: "c-2", name: "Boncho", phone: "", location: "", landmark: "", notes: "", createdAt: "2026-08-19T09:00:00Z" },
+      { id: "c-shared", name: "Shared (edited on B)", phone: "123", location: "", landmark: "", notes: "", createdAt: "2026-08-18T08:00:00Z" },
+    ],
+    updatedAt: 2000,
+  };
+
+  it("keeps unique records from BOTH devices (the actual bug)", () => {
+    const merged = mergeData(deviceA, deviceB);
+    const names = merged.customers.map((c) => c.name);
+    expect(names).toContain("Mod Motors");   // only on A
+    expect(names).toContain("Boncho");       // only on B
+    expect(names).toContain("Shared (edited on B)");
+    expect(merged.expenses).toHaveLength(1); // A's expense kept
+    expect(merged.expenses[0].id).toBe("e-1");
+  });
+
+  it("resolves same-id conflicts to the newer dataset's copy", () => {
+    const merged = mergeData(deviceA, deviceB);
+    const shared = merged.customers.find((c) => c.id === "c-shared");
+    // deviceB has higher updatedAt (2000 > 1000), so B's version wins
+    expect(shared?.name).toBe("Shared (edited on B)");
+    expect(shared?.phone).toBe("123");
+  });
+
+  it("sets updatedAt to max of both", () => {
+    const merged = mergeData(deviceA, deviceB);
+    expect(merged.updatedAt).toBe(2000);
+  });
+
+  it("handles empty/missing arrays gracefully", () => {
+    const sparse: CRMData = { ...emptyCRMData, updatedAt: 500 };
+    const merged = mergeData(deviceA, sparse);
+    expect(merged.customers).toHaveLength(2); // A's records survive
+    expect(merged.expenses).toHaveLength(1);
+  });
+
+  it("old replace-wholesale behaviour would lose adds (regression guard)", () => {
+    // The pre-fix code picked ONE side based on updatedAt — the loser's
+    // unique records vanished. mergeData must keep both.
+    const merged = mergeData(deviceA, deviceB);
+    const allIds = merged.customers.map((c) => c.id);
+    expect(allIds).toContain("c-1"); // A-only
+    expect(allIds).toContain("c-2"); // B-only
+    expect(allIds).toContain("c-shared");
+    expect(merged.customers.length).toBe(3); // union, not replace
   });
 });
 

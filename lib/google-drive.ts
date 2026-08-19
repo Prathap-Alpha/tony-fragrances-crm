@@ -227,8 +227,11 @@ async function doSave(data: any): Promise<boolean> {
           toSave = mergeData(local, remote);
         }
       }
-    } catch {
-      // If the read fails, save the local data as-is rather than losing it.
+    } catch (error) {
+      // Save local data as-is rather than aborting — the merge design is
+      // self-healing: the other device still holds its records and restores
+      // them at its next load/save merge cycle.
+      console.warn("Pre-save Drive read failed; saving local copy without merge.", error);
     }
   }
 
