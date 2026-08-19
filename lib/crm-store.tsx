@@ -136,7 +136,9 @@ export function CRMProvider({ children }: { children: ReactNode }) {
 
   // When the browser tab regains focus (Tony switches from phone to computer or
   // just re-opens the browser), refresh from Drive so records from the other
-  // device appear automatically without a manual reload.
+  // device appear automatically without a manual reload. AND while the tab is
+  // open and visible, keep pulling from Drive every 30 seconds so a change made
+  // on the other device shows up without needing a tab switch.
   useEffect(() => {
     if (!NEEDS_GOOGLE || !signedIn) return;
     if (typeof document === "undefined") return;
@@ -144,7 +146,13 @@ export function CRMProvider({ children }: { children: ReactNode }) {
       if (document.visibilityState === "visible") void loadFromCloud();
     };
     document.addEventListener("visibilitychange", handler);
-    return () => document.removeEventListener("visibilitychange", handler);
+    const interval = setInterval(() => {
+      if (document.visibilityState === "visible") void loadFromCloud();
+    }, 30_000);
+    return () => {
+      document.removeEventListener("visibilitychange", handler);
+      clearInterval(interval);
+    };
   }, [signedIn, loadFromCloud]);
 
   const signIn = useCallback(async () => {

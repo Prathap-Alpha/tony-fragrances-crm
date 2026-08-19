@@ -141,11 +141,22 @@ function requestToken(interactive: boolean): Promise<StoredToken> {
 }
 
 // Called on app start: if we already have a valid token, use it silently.
+// If the stored token has expired, try to renew it silently (no popup) so the
+// user doesn't have to sign in again every hour when Google's access token
+// naturally lapses. Only fall back to "not signed in" if silent renewal fails.
 export async function restoreSession(): Promise<GoogleUser | null> {
   if (!isConfigured()) return null;
   const stored = readStoredToken();
   if (stored) return { email: stored.email };
-  return null;
+  // Nothing valid in storage. Attempt a silent renewal for a user who has
+  // already consented in this browser profile. This is what keeps sync alive
+  // across the phone/laptop reopens that happen every day.
+  try {
+    const renewed = await requestToken(false);
+    return { email: renewed.email };
+  } catch {
+    return null;
+  }
 }
 
 export async function signIn(): Promise<GoogleUser> {
