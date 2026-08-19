@@ -19,32 +19,34 @@ import {
   CreateSaleInput,
 } from "./crm-domain";
 import {
-  isConfigured as isGoogleConfigured,
-  loadFromDrive,
-  resetDriveState,
+  isConfigured as isCloudConfigured,
+  loadRemote,
+  resetState as resetCloudState,
   restoreSession,
-  saveToDrive,
-  signIn as googleSignIn,
-  signOut as googleSignOut,
-} from "./google-drive";
+  saveRemote,
+  signIn as cloudSignIn,
+  signOut as cloudSignOut,
+} from "./supabase-sync";
 
 const STORAGE_KEY = "tony-fragrances-crm-v1";
+// How often to pull the latest from the cloud while the tab is open and visible.
+const SYNC_INTERVAL_MS = 15_000;
 
-// On native (Expo Android) there is no Google sign-in — the app just uses the
-// on-device cache. On web, data lives in each user's own Google Drive.
-const NEEDS_GOOGLE = Platform.OS === "web" && isGoogleConfigured();
+// On native (Expo Android) there is no cloud sign-in — the app just uses the
+// on-device cache. On web, data lives in the shared Supabase workspace.
+const NEEDS_AUTH = Platform.OS === "web" && isCloudConfigured();
 
 type CRMContextValue = {
   data: CRMData;
   loading: boolean;
-  // Google Drive sign-in state (web).
-  needsGoogle: boolean;      // true when a Google sign-in is required to see data
-  signedIn: boolean;         // the user has signed in with Google
-  authReady: boolean;        // finished checking for an existing session
-  userEmail: string;         // which Google account holds the data
-  syncing: boolean;          // refreshing from Google Drive right now
+  // Cloud sign-in state (web).
+  needsAuth: boolean;        // true when a passcode is required to see data
+  signedIn: boolean;         // the user has entered the workspace passcode
+  authReady: boolean;        // finished checking for a stored passcode
+  workspaceLabel: string;    // short non-secret label for the shared workspace
+  syncing: boolean;          // refreshing from the cloud right now
   syncError: string;         // last save/load error, if any
-  signIn: () => Promise<void>;
+  signIn: (passcode: string) => Promise<void>;
   signOut: () => void;
   summary: ReturnType<typeof financeSnapshot>;
   addCustomer: (input: Omit<Customer, "id" | "createdAt">) => Customer;
@@ -63,9 +65,9 @@ const CRMContext = createContext<CRMContextValue | null>(null);
 export function CRMProvider({ children }: { children: ReactNode }) {
   const [data, setData] = useState<CRMData>(emptyCRMData);
   const [loading, setLoading] = useState(true);
-  const [signedIn, setSignedIn] = useState(!NEEDS_GOOGLE); // native/unconfigured = no gate
+  const [signedIn, setSignedIn] = useState(!NEEDS_AUTH); // native/unconfigured = no gate
   const [authReady, setAuthReady] = useState(false);
-  const [userEmail, setUserEmail] = useState("");
+  const [workspaceLabel, setWorkspaceLabel] = useState("");
   const [syncing, setSyncing] = useState(false);
   const [syncError, setSyncError] = useState("");
   const syncingRef = useRef(false);
@@ -78,14 +80,14 @@ export function CRMProvider({ children }: { children: ReactNode }) {
     } catch { /* ignore */ }
   }, []);
 
-  // Pull the latest from Google Drive and MERGE with this device's data so
-  // records added on either device are never lost (union by id).
+  // Pull the latest from the cloud and MERGE with this device's data so records
+  // added on either device are never lost (union by id).
   const loadFromCloud = useCallback(async () => {
     if (syncingRef.current) return;         // already running
     syncingRef.current = true;
     setSyncing(true);
     try {
-      const remote = await loadFromDrive();
+      const remote = await loadRemote();
       if (remote) {
         let local: CRMData = emptyCRMData;
         try {
@@ -98,31 +100,31 @@ export function CRMProvider({ children }: { children: ReactNode }) {
 
         setData(merged);
         void AsyncStorage.setItem(STORAGE_KEY, JSON.stringify(merged));
-        // Only push back to Drive if the merge actually added local records the
-        // remote didn't have — avoids a redundant write on every tab-focus.
+        // Only push back if the merge actually added local records the remote
+        // didn't have — avoids a redundant write on every poll.
         if (JSON.stringify(merged) !== JSON.stringify(remoteData)) {
-          void saveToDrive(merged);
+          void saveRemote(merged);
         }
       }
       setSyncError("");
     } catch (error) {
-      setSyncError(error instanceof Error ? error.message : "Could not load from Google Drive.");
+      setSyncError(error instanceof Error ? error.message : "Could not sync with the cloud.");
     } finally {
       syncingRef.current = false;
       setSyncing(false);
     }
   }, []);
 
-  // On start: show the cache, then restore any existing Google session.
+  // On start: show the cache, then restore any stored passcode.
   useEffect(() => {
     let active = true;
     (async () => {
       await loadCache();
-      if (NEEDS_GOOGLE) {
-        const user = await restoreSession();
-        if (active && user) {
+      if (NEEDS_AUTH) {
+        const ws = await restoreSession();
+        if (active && ws) {
           setSignedIn(true);
-          setUserEmail(user.email);
+          setWorkspaceLabel(ws.label);
           await loadFromCloud();
         }
       }
@@ -134,13 +136,12 @@ export function CRMProvider({ children }: { children: ReactNode }) {
     return () => { active = false; };
   }, [loadCache, loadFromCloud]);
 
-  // When the browser tab regains focus (Tony switches from phone to computer or
-  // just re-opens the browser), refresh from Drive so records from the other
-  // device appear automatically without a manual reload. AND while the tab is
-  // open and visible, keep pulling from Drive every 30 seconds so a change made
-  // on the other device shows up without needing a tab switch.
+  // While signed in and the tab is visible, pull from the cloud every 15s AND
+  // whenever the tab regains focus, so a change made on the other device shows
+  // up automatically without a manual reload. A passcode never expires, so this
+  // keeps working indefinitely.
   useEffect(() => {
-    if (!NEEDS_GOOGLE || !signedIn) return;
+    if (!NEEDS_AUTH || !signedIn) return;
     if (typeof document === "undefined") return;
     const handler = () => {
       if (document.visibilityState === "visible") void loadFromCloud();
@@ -148,25 +149,25 @@ export function CRMProvider({ children }: { children: ReactNode }) {
     document.addEventListener("visibilitychange", handler);
     const interval = setInterval(() => {
       if (document.visibilityState === "visible") void loadFromCloud();
-    }, 30_000);
+    }, SYNC_INTERVAL_MS);
     return () => {
       document.removeEventListener("visibilitychange", handler);
       clearInterval(interval);
     };
   }, [signedIn, loadFromCloud]);
 
-  const signIn = useCallback(async () => {
-    const user = await googleSignIn();
+  const signIn = useCallback(async (passcode: string) => {
+    const ws = await cloudSignIn(passcode);
     setSignedIn(true);
-    setUserEmail(user.email);
+    setWorkspaceLabel(ws.label);
     await loadFromCloud();
   }, [loadFromCloud]);
 
   const signOut = useCallback(() => {
-    googleSignOut();
-    resetDriveState();
+    cloudSignOut();
+    resetCloudState();
     setSignedIn(false);
-    setUserEmail("");
+    setWorkspaceLabel("");
   }, []);
 
   const persist = useCallback((next: CRMData) => {
@@ -174,9 +175,9 @@ export function CRMProvider({ children }: { children: ReactNode }) {
     const stamped: CRMData = { ...next, updatedAt: Date.now() };
     setData(stamped);
     void AsyncStorage.setItem(STORAGE_KEY, JSON.stringify(stamped));
-    if (NEEDS_GOOGLE && signedIn) {
-      void saveToDrive(stamped)
-        .then((ok) => setSyncError(ok ? "" : "Your last change did not save to Google Drive."))
+    if (NEEDS_AUTH && signedIn) {
+      void saveRemote(stamped)
+        .then((ok) => setSyncError(ok ? "" : "Your last change did not save to the cloud."))
         .catch((error) => setSyncError(error instanceof Error ? error.message : "Save failed."));
     }
   }, [signedIn]);
@@ -238,10 +239,10 @@ export function CRMProvider({ children }: { children: ReactNode }) {
   const value = useMemo(() => ({
     data,
     loading,
-    needsGoogle: NEEDS_GOOGLE,
+    needsAuth: NEEDS_AUTH,
     signedIn,
     authReady,
-    userEmail,
+    workspaceLabel,
     syncing,
     syncError,
     signIn,
@@ -256,7 +257,7 @@ export function CRMProvider({ children }: { children: ReactNode }) {
     addPayment,
     addExpense,
     updateDeliveryStatus,
-  }), [data, loading, signedIn, authReady, userEmail, syncing, syncError, signIn, signOut, addCustomer, updateCustomer, addProduct, importProducts, adjustProduct, createSale, addPayment, addExpense, updateDeliveryStatus]);
+  }), [data, loading, signedIn, authReady, workspaceLabel, syncing, syncError, signIn, signOut, addCustomer, updateCustomer, addProduct, importProducts, adjustProduct, createSale, addPayment, addExpense, updateDeliveryStatus]);
 
   return <CRMContext.Provider value={value}>{children}</CRMContext.Provider>;
 }

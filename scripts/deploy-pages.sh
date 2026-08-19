@@ -3,7 +3,14 @@
 set -euo pipefail
 cd "$(dirname "$0")/.."
 
-export EXPO_PUBLIC_GOOGLE_CLIENT_ID="196234648247-sbmaderc4hua2klnslj6cmvh4dmpicib.apps.googleusercontent.com"
+# Supabase (nakotech) shared-passcode storage. Both are PUBLIC values, safe to
+# ship in the web bundle (the anon key only reaches rows RLS allows, gated by
+# Tony's secret passcode). Set them in the environment before running this
+# script, e.g.  EXPO_PUBLIC_SUPABASE_URL=... EXPO_PUBLIC_SUPABASE_ANON_KEY=... ./scripts/deploy-pages.sh
+: "${EXPO_PUBLIC_SUPABASE_URL:?Set EXPO_PUBLIC_SUPABASE_URL (nakotech project URL) before deploying}"
+: "${EXPO_PUBLIC_SUPABASE_ANON_KEY:?Set EXPO_PUBLIC_SUPABASE_ANON_KEY (nakotech anon key) before deploying}"
+export EXPO_PUBLIC_SUPABASE_URL
+export EXPO_PUBLIC_SUPABASE_ANON_KEY
 # NO leading slash — Git Bash would rewrite "/tony-fragrances-crm" into a
 # Windows file path. app.config.ts adds the leading slash back. (Do NOT set
 # MSYS_NO_PATHCONV here — it breaks the git worktree path below on Windows.)

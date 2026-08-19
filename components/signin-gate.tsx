@@ -1,14 +1,14 @@
 import MaterialIcons from "@expo/vector-icons/MaterialIcons";
 import { ReactNode, useState } from "react";
-import { ActivityIndicator, StyleSheet, Text, TouchableOpacity, View } from "react-native";
+import { ActivityIndicator, StyleSheet, Text, TextInput, TouchableOpacity, View } from "react-native";
 
 import { useColors } from "@/hooks/use-colors";
 import { useCRM } from "@/lib/crm-store";
 
-// Shows a "Sign in with Google" screen until the user is signed in. Once signed
-// in (or on native, or before a Google client ID is set) it renders the app.
+// Shows a passcode screen until the workspace passcode is entered. Once entered
+// (or on native, or before cloud sync is configured) it renders the app.
 export function SignInGate({ children }: { children: ReactNode }) {
-  const { authReady, needsGoogle, signedIn } = useCRM();
+  const { authReady, needsAuth, signedIn } = useCRM();
   const colors = useColors();
 
   if (!authReady) {
@@ -19,14 +19,15 @@ export function SignInGate({ children }: { children: ReactNode }) {
     );
   }
 
-  if (needsGoogle && !signedIn) return <SignInScreen />;
+  if (needsAuth && !signedIn) return <PasscodeScreen />;
 
   return <>{children}</>;
 }
 
-function SignInScreen() {
+function PasscodeScreen() {
   const { signIn } = useCRM();
   const colors = useColors();
+  const [passcode, setPasscode] = useState("");
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState("");
 
@@ -34,9 +35,9 @@ function SignInScreen() {
     setBusy(true);
     setError("");
     try {
-      await signIn();
+      await signIn(passcode);
     } catch (e) {
-      setError(e instanceof Error ? e.message : "Sign-in failed. Please try again.");
+      setError(e instanceof Error ? e.message : "Could not open your workspace. Please try again.");
     } finally {
       setBusy(false);
     }
@@ -50,9 +51,21 @@ function SignInScreen() {
         </View>
         <Text style={[styles.title, { color: colors.foreground }]}>Tony Fragrances CRM</Text>
         <Text style={[styles.subtitle, { color: colors.muted }]}>
-          Sign in with Google. Your customers, sales and money records are saved
-          privately in your own Google Drive — only you can see them.
+          Enter your passcode. Type the same passcode on your phone and your
+          computer and both show the same customers, sales and money records.
         </Text>
+
+        <TextInput
+          value={passcode}
+          onChangeText={setPasscode}
+          placeholder="Your passcode"
+          placeholderTextColor={colors.muted}
+          secureTextEntry
+          autoCapitalize="none"
+          autoCorrect={false}
+          onSubmitEditing={onPress}
+          style={[styles.input, { color: colors.foreground, borderColor: colors.border, backgroundColor: colors.surface }]}
+        />
 
         <TouchableOpacity
           onPress={onPress}
@@ -63,8 +76,8 @@ function SignInScreen() {
             <ActivityIndicator color="#18130B" />
           ) : (
             <>
-              <MaterialIcons name="login" color="#18130B" size={20} />
-              <Text style={styles.buttonText}>Sign in with Google</Text>
+              <MaterialIcons name="lock-open" color="#18130B" size={20} />
+              <Text style={styles.buttonText}>Open my workspace</Text>
             </>
           )}
         </TouchableOpacity>
@@ -72,7 +85,7 @@ function SignInScreen() {
         {error ? <Text style={[styles.error, { color: colors.error }]}>{error}</Text> : null}
 
         <Text style={[styles.footnote, { color: colors.muted }]}>
-          The app only ever touches the one file it creates in your Drive.
+          Keep your passcode private — anyone who knows it can see your records.
         </Text>
       </View>
     </View>
@@ -86,7 +99,8 @@ const styles = StyleSheet.create({
   logoText: { color: "#18130B", fontWeight: "900", fontSize: 24, letterSpacing: 0.5 },
   title: { fontSize: 26, fontWeight: "800", letterSpacing: -0.5, textAlign: "center" },
   subtitle: { fontSize: 14, lineHeight: 21, textAlign: "center", marginTop: 10 },
-  button: { marginTop: 26, minHeight: 52, alignSelf: "stretch", borderRadius: 16, flexDirection: "row", gap: 8, alignItems: "center", justifyContent: "center" },
+  input: { alignSelf: "stretch", marginTop: 22, minHeight: 52, borderRadius: 16, borderWidth: 1, paddingHorizontal: 16, fontSize: 16 },
+  button: { marginTop: 14, minHeight: 52, alignSelf: "stretch", borderRadius: 16, flexDirection: "row", gap: 8, alignItems: "center", justifyContent: "center" },
   buttonText: { color: "#18130B", fontWeight: "800", fontSize: 15 },
   disabled: { opacity: 0.6 },
   error: { marginTop: 14, fontSize: 13, textAlign: "center" },
