@@ -135,7 +135,7 @@ export async function loadRemote(): Promise<any | null> {
   const url =
     `${SUPABASE_URL}/rest/v1/${SUPABASE_TABLE}` +
     `?workspace=eq.${encodeURIComponent(key)}&select=data`;
-  const res = await fetch(url, { headers: headers(key) });
+  const res = await fetch(url, { headers: headers(key), cache: "no-store" });
   if (!res.ok) throw new Error(`Cloud read failed (${res.status}).`);
   const rows = await res.json();
   const row = Array.isArray(rows) ? rows[0] : null;
@@ -179,6 +179,7 @@ async function doSave(data: any): Promise<boolean> {
     `?on_conflict=workspace`;
   const res = await fetch(url, {
     method: "POST",
+    cache: "no-store",
     headers: {
       ...headers(key),
       // Upsert: insert, or update the existing row for this workspace.
@@ -186,5 +187,9 @@ async function doSave(data: any): Promise<boolean> {
     },
     body: JSON.stringify({ workspace: key, data: toSave, updated_at: new Date().toISOString() }),
   });
+  if (!res.ok) {
+    const body = await res.text().catch(() => "");
+    console.error(`[sync] Save failed ${res.status}:`, body);
+  }
   return res.ok;
 }

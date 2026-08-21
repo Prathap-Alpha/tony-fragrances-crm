@@ -57,6 +57,8 @@ type CRMContextValue = {
   createSale: (input: CreateSaleInput) => Invoice;
   addPayment: (input: { invoiceId: string; amount: number; method: PaymentMethod; reference: string }) => void;
   addExpense: (input: Omit<Expense, "id" | "date"> & { date?: string }) => Expense;
+  updateProduct: (id: string, patch: Partial<Omit<Product, "id" | "createdAt">>) => void;
+  updateSettings: (patch: { businessName?: string; invoicePrefix?: string }) => void;
   updateDeliveryStatus: (id: string, status: DeliveryStatus) => void;
 };
 
@@ -211,6 +213,10 @@ export function CRMProvider({ children }: { children: ReactNode }) {
     return fresh.length;
   }, [data, persist]);
 
+  const updateProduct = useCallback((id: string, patch: Partial<Omit<Product, "id" | "createdAt">>) => {
+    persist({ ...data, products: data.products.map((product) => product.id === id ? { ...product, ...patch } : product) });
+  }, [data, persist]);
+
   const adjustProduct = useCallback((id: string, quantityChange: number) => {
     persist({ ...data, products: data.products.map((product) => product.id === id ? { ...product, quantityOnHand: Math.max(0, product.quantityOnHand + quantityChange) } : product) });
   }, [data, persist]);
@@ -230,6 +236,10 @@ export function CRMProvider({ children }: { children: ReactNode }) {
     const expense: Expense = { id: createId("expense"), date: input.date ?? new Date().toISOString(), ...input };
     persist({ ...data, expenses: [expense, ...data.expenses] });
     return expense;
+  }, [data, persist]);
+
+  const updateSettings = useCallback((patch: { businessName?: string; invoicePrefix?: string }) => {
+    persist({ ...data, ...(patch.businessName !== undefined ? { businessName: patch.businessName } : {}), ...(patch.invoicePrefix !== undefined ? { invoicePrefix: patch.invoicePrefix } : {}) });
   }, [data, persist]);
 
   const updateDeliveryStatus = useCallback((id: string, status: DeliveryStatus) => {
@@ -252,12 +262,14 @@ export function CRMProvider({ children }: { children: ReactNode }) {
     updateCustomer,
     addProduct,
     importProducts,
+    updateProduct,
     adjustProduct,
     createSale,
     addPayment,
     addExpense,
+    updateSettings,
     updateDeliveryStatus,
-  }), [data, loading, signedIn, authReady, workspaceLabel, syncing, syncError, signIn, signOut, addCustomer, updateCustomer, addProduct, importProducts, adjustProduct, createSale, addPayment, addExpense, updateDeliveryStatus]);
+  }), [data, loading, signedIn, authReady, workspaceLabel, syncing, syncError, signIn, signOut, addCustomer, updateCustomer, addProduct, importProducts, updateProduct, adjustProduct, createSale, addPayment, addExpense, updateSettings, updateDeliveryStatus]);
 
   return <CRMContext.Provider value={value}>{children}</CRMContext.Provider>;
 }
