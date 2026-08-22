@@ -13,7 +13,7 @@ import { TONY_FACEBOOK_CATALOGUE } from "@/constants/catalogue";
 export default function InventoryScreen() {
   const router = useRouter();
   const colors = useColors();
-  const { data, addProduct, importProducts, adjustProduct, updateProduct } = useCRM();
+  const { data, addProduct, importProducts, adjustProduct, updateProduct, deleteProduct } = useCRM();
   const [adding, setAdding] = useState(false);
   const [editingId, setEditingId] = useState<string | null>(null);
   const [name, setName] = useState("");
@@ -62,6 +62,17 @@ export default function InventoryScreen() {
     setName(""); setSku(""); setCost(""); setPrice(""); setQuantity("");
   };
 
+  const removeProduct = () => {
+    if (!editingId) return;
+    // Alert.alert buttons don't render on web, so use the browser's own confirm.
+    const ok = typeof window !== "undefined" && typeof window.confirm === "function"
+      ? window.confirm(`Delete "${name}" from your inventory? This removes it on every device.`)
+      : true;
+    if (!ok) return;
+    deleteProduct(editingId);
+    cancelForm();
+  };
+
   if (adding) return (
     <ScreenContainer>
       <ScrollView contentContainerStyle={styles.content} keyboardShouldPersistTaps="handled">
@@ -72,6 +83,12 @@ export default function InventoryScreen() {
         <FormInput label="Selling price (BWP)" value={price} onChangeText={setPrice} placeholder="0.00" keyboardType="decimal-pad" />
         <FormInput label="Quantity in stock" value={quantity} onChangeText={setQuantity} placeholder="0" keyboardType="numeric" />
         <PrimaryButton title={editingId ? "Save changes" : "Save product"} icon="check" onPress={save} />
+        {editingId ? (
+          <TouchableOpacity onPress={removeProduct} style={[styles.deleteButton, { borderColor: colors.error }]}>
+            <MaterialIcons name="delete-outline" color={colors.error} size={20} />
+            <Text style={[styles.deleteText, { color: colors.error }]}>Delete this product</Text>
+          </TouchableOpacity>
+        ) : null}
       </ScrollView>
     </ScreenContainer>
   );
@@ -133,6 +150,8 @@ const styles = StyleSheet.create({
   productName: { fontSize: 15, fontWeight: "800" },
   productMeta: { fontSize: 11, lineHeight: 17, marginTop: 4 },
   stock: { alignItems: "center", gap: 4 },
+  deleteButton: { marginTop: 12, minHeight: 48, borderRadius: 15, borderWidth: 1, flexDirection: "row", gap: 8, alignItems: "center", justifyContent: "center" },
+  deleteText: { fontSize: 14, fontWeight: "800" },
   stockButton: { height: 28, width: 28, borderRadius: 10, borderWidth: 1, alignItems: "center", justifyContent: "center" },
   stockNumber: { fontSize: 14, fontWeight: "800" },
 });

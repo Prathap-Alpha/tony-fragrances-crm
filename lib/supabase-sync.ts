@@ -132,9 +132,13 @@ export async function loadRemote(): Promise<any | null> {
   if (!isConfigured()) return null;
   const key = await ensureWorkspace();
   if (!key) return null;
+  // `limit=<timestamp>` makes every read URL unique. This defeats the OLD
+  // service worker still installed on devices, which cached GETs by URL and
+  // kept serving a frozen first snapshot — the reason sync "never worked".
+  // PostgREST accepts any large limit (only 1 row exists), so it's harmless.
   const url =
     `${SUPABASE_URL}/rest/v1/${SUPABASE_TABLE}` +
-    `?workspace=eq.${encodeURIComponent(key)}&select=data`;
+    `?workspace=eq.${encodeURIComponent(key)}&select=data&limit=${Date.now()}`;
   const res = await fetch(url, { headers: headers(key), cache: "no-store" });
   if (!res.ok) throw new Error(`Cloud read failed (${res.status}).`);
   const rows = await res.json();

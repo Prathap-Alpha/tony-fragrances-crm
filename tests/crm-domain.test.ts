@@ -79,6 +79,22 @@ describe("mergeData — cross-device sync", () => {
     expect(merged.expenses).toHaveLength(1);
   });
 
+  it("a record deleted on one device stays deleted after merge (tombstones)", () => {
+    // Device A deleted c-shared; device B still has it. Without tombstones the
+    // union merge resurrects it — the merge must honour deletedIds from either side.
+    const aDeleted: CRMData = {
+      ...deviceA,
+      customers: deviceA.customers.filter((c) => c.id !== "c-shared"),
+      deletedIds: ["c-shared"],
+    };
+    const merged = mergeData(aDeleted, deviceB);
+    expect(merged.customers.map((c) => c.id)).not.toContain("c-shared");
+    expect(merged.deletedIds).toContain("c-shared");
+    // And the same holds when the tombstone arrives from the OTHER side.
+    const mergedReverse = mergeData(deviceB, aDeleted);
+    expect(mergedReverse.customers.map((c) => c.id)).not.toContain("c-shared");
+  });
+
   it("old replace-wholesale behaviour would lose adds (regression guard)", () => {
     // The pre-fix code picked ONE side based on updatedAt — the loser's
     // unique records vanished. mergeData must keep both.

@@ -1,7 +1,7 @@
 // Service worker for offline support + installability. Path-agnostic: it uses
 // its own registration scope, so it works whether the app is served at a domain
 // root or under a sub-path like /tony-fragrances-crm/.
-const CACHE_NAME = "tony-fragrances-crm-v2";
+const CACHE_NAME = "tony-fragrances-crm-v3";
 const SCOPE_URL = new URL(self.registration.scope);
 const APP_SHELL = SCOPE_URL.pathname; // e.g. "/tony-fragrances-crm/"
 
@@ -19,6 +19,13 @@ self.addEventListener("activate", (event) => {
 self.addEventListener("fetch", (event) => {
   const req = event.request;
   if (req.method !== "GET") return;
+
+  // NEVER intercept cross-origin requests — in particular the Supabase data
+  // API. Caching those was the sync-killer: the app polled the cloud every 15s
+  // but this worker answered every poll with the first snapshot it ever saw,
+  // so changes made on the other device never arrived. Only same-origin static
+  // assets belong in the offline cache.
+  if (new URL(req.url).origin !== self.location.origin) return;
 
   // Navigations: network-first so new versions are picked up, cache as fallback
   // (this is what keeps the app usable offline once it has been opened online).

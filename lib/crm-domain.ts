@@ -83,6 +83,10 @@ export type CRMData = {
   // Epoch ms of the last change. Used to decide whether the copy in Google Drive
   // or the copy cached on this device is the newer one.
   updatedAt?: number;
+  // Tombstones: ids of records deleted on any device. Without these, the
+  // union-by-id merge would resurrect a deleted record from the other device's
+  // copy on the very next sync.
+  deletedIds?: string[];
 };
 
 export type CreateSaleInput = {
@@ -103,6 +107,7 @@ export const emptyCRMData: CRMData = {
   deliveries: [],
   payments: [],
   expenses: [],
+  deletedIds: [],
 };
 
 export const money = (value: number) => `BWP ${Number.isFinite(value) ? value.toFixed(2) : "0.00"}`;
@@ -213,14 +218,17 @@ export function mergeData(a: CRMData, b: CRMData): CRMData {
   const winner = aIsNewer ? a : b;
   const loser = aIsNewer ? b : a;
 
+  // A record deleted on EITHER device stays deleted everywhere.
+  const deleted = new Set<string>([...(a.deletedIds ?? []), ...(b.deletedIds ?? [])]);
+
   function union<T extends { id: string }>(winnerArr: T[], loserArr: T[]): T[] {
     const seen = new Set<string>();
     const result: T[] = [];
     for (const item of winnerArr) {
-      if (!seen.has(item.id)) { seen.add(item.id); result.push(item); }
+      if (!seen.has(item.id) && !deleted.has(item.id)) { seen.add(item.id); result.push(item); }
     }
     for (const item of loserArr) {
-      if (!seen.has(item.id)) { seen.add(item.id); result.push(item); }
+      if (!seen.has(item.id) && !deleted.has(item.id)) { seen.add(item.id); result.push(item); }
     }
     return result;
   }
@@ -235,5 +243,6 @@ export function mergeData(a: CRMData, b: CRMData): CRMData {
     payments: union(winner.payments, loser.payments),
     expenses: union(winner.expenses, loser.expenses),
     updatedAt: Math.max(a.updatedAt ?? 0, b.updatedAt ?? 0),
+    deletedIds: Array.from(deleted),
   };
 }

@@ -58,6 +58,7 @@ type CRMContextValue = {
   addPayment: (input: { invoiceId: string; amount: number; method: PaymentMethod; reference: string }) => void;
   addExpense: (input: Omit<Expense, "id" | "date"> & { date?: string }) => Expense;
   updateProduct: (id: string, patch: Partial<Omit<Product, "id" | "createdAt">>) => void;
+  deleteProduct: (id: string) => void;
   updateSettings: (patch: { businessName?: string; invoicePrefix?: string }) => void;
   updateDeliveryStatus: (id: string, status: DeliveryStatus) => void;
 };
@@ -217,6 +218,16 @@ export function CRMProvider({ children }: { children: ReactNode }) {
     persist({ ...data, products: data.products.map((product) => product.id === id ? { ...product, ...patch } : product) });
   }, [data, persist]);
 
+  const deleteProduct = useCallback((id: string) => {
+    // Tombstone the id so the sync merge doesn't resurrect it from the other
+    // device's copy.
+    persist({
+      ...data,
+      products: data.products.filter((product) => product.id !== id),
+      deletedIds: [...(data.deletedIds ?? []), id],
+    });
+  }, [data, persist]);
+
   const adjustProduct = useCallback((id: string, quantityChange: number) => {
     persist({ ...data, products: data.products.map((product) => product.id === id ? { ...product, quantityOnHand: Math.max(0, product.quantityOnHand + quantityChange) } : product) });
   }, [data, persist]);
@@ -263,13 +274,14 @@ export function CRMProvider({ children }: { children: ReactNode }) {
     addProduct,
     importProducts,
     updateProduct,
+    deleteProduct,
     adjustProduct,
     createSale,
     addPayment,
     addExpense,
     updateSettings,
     updateDeliveryStatus,
-  }), [data, loading, signedIn, authReady, workspaceLabel, syncing, syncError, signIn, signOut, addCustomer, updateCustomer, addProduct, importProducts, updateProduct, adjustProduct, createSale, addPayment, addExpense, updateSettings, updateDeliveryStatus]);
+  }), [data, loading, signedIn, authReady, workspaceLabel, syncing, syncError, signIn, signOut, addCustomer, updateCustomer, addProduct, importProducts, updateProduct, deleteProduct, adjustProduct, createSale, addPayment, addExpense, updateSettings, updateDeliveryStatus]);
 
   return <CRMContext.Provider value={value}>{children}</CRMContext.Provider>;
 }
