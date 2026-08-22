@@ -75,6 +75,11 @@ async function ensureWorkspace(): Promise<string | null> {
   return workspaceKey;
 }
 
+// The current workspace key, for other cloud calls (e.g. the AI assistant).
+export async function getWorkspace(): Promise<string | null> {
+  return ensureWorkspace();
+}
+
 // A short, non-secret label for the UI ("shop code ab12") derived from the key.
 function workspaceLabel(key: string): string {
   return `shop code ${key.slice(0, 4)}`;
